@@ -1,47 +1,8 @@
-import { useState } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Send, Zap, CheckCircle2, Circle, Loader2, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface PlanStep {
-  id: string;
-  label: string;
-  status: "pending" | "in-progress" | "completed";
-  agent?: string;
-}
-
-interface Message {
-  id: string;
-  role: "user" | "orchestrator" | "system";
-  content: string;
-  timestamp: Date;
-  plan?: PlanStep[];
-}
-
-const mockMessages: Message[] = [
-  {
-    id: "1",
-    role: "system",
-    content: "Vox Populi initialized. All agents standing by.",
-    timestamp: new Date(Date.now() - 300000),
-  },
-  {
-    id: "2",
-    role: "user",
-    content: "Research the latest trends in AI agent orchestration and create a technical brief.",
-    timestamp: new Date(Date.now() - 240000),
-  },
-  {
-    id: "3",
-    role: "orchestrator",
-    content: "Understood. I'm deploying a multi-agent workflow to handle this request.",
-    timestamp: new Date(Date.now() - 230000),
-    plan: [
-      { id: "s1", label: "Deep research on AI orchestration patterns", status: "completed", agent: "Atlas" },
-      { id: "s2", label: "Synthesize findings into structured brief", status: "in-progress", agent: "Echo" },
-      { id: "s3", label: "Code review for technical accuracy", status: "pending", agent: "Sentinel" },
-    ],
-  },
-];
+import { useMessages, type Message, type PlanStep } from "@/hooks/useMessages";
+import { useOrchestrator } from "@/hooks/useOrchestrator";
 
 function PlanStepper({ steps }: { steps: PlanStep[] }) {
   return (
@@ -52,7 +13,7 @@ function PlanStepper({ steps }: { steps: PlanStep[] }) {
       </div>
       <div className="space-y-2">
         {steps.map((step, index) => (
-          <div key={step.id} className="flex items-start gap-3">
+          <div key={step.id || index} className="flex items-start gap-3">
             <div className="pt-0.5">
               {step.status === "completed" ? (
                 <CheckCircle2 className="w-4 h-4 text-status-active" />
@@ -103,8 +64,8 @@ function MessageBubble({ message }: { message: Message }) {
             <span className="text-xs text-primary font-medium">System</span>
           </div>
         )}
-        <p className="text-sm">{message.content}</p>
-        {message.plan && <PlanStepper steps={message.plan} />}
+        <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+        {message.plan && message.plan.length > 0 && <PlanStepper steps={message.plan} />}
         <p className={cn(
           "text-xs mt-2",
           isUser ? "text-primary-foreground/70" : "text-muted-foreground"
@@ -118,12 +79,98 @@ function MessageBubble({ message }: { message: Message }) {
 
 export function CommandStream() {
   const [input, setInput] = useState("");
-  
-  const handleSubmit = (e: React.FormEvent) => {
+  const { messages, isLoading: messagesLoading, addMessage, addLocalMessage, updateLocalMessage } = useMessages();
+  const { sendMessage, isLoading: orchestratorLoading } = useOrchestrator();
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const streamingContentRef = useRef<string>("");
+  const streamingPlanRef = useRef<PlanStep[]>([]);
+
+  // Auto-scroll to bottom when messages change
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!input.trim()) return;
-    // In a real app, this would send the message
+    if (!input.trim() || orchestratorLoading) return;
+    
+    const userContent = input.trim();
     setInput("");
+    
+    // Add user message locally immediately
+    const userMsgId = `local-user-${Date.now()}`;
+    addLocalMessage({
+      id: userMsgId,
+      role: "user",
+      content: userContent,
+      timestamp: new Date(),
+    });
+
+    // Save user message to DB
+    await addMessage("user", userContent);
+
+    // Create streaming orchestrator message
+    const streamMsgId = `local-orch-${Date.now()}`;
+    streamingContentRef.current = "";
+    streamingPlanRef.current = [];
+    
+    addLocalMessage({
+      id: streamMsgId,
+      role: "orchestrator",
+      content: "",
+      timestamp: new Date(),
+    });
+
+    // Build conversation history for context (exclude the just-added messages)
+    const conversationHistory = messages
+      .filter(m => m.role === "user" || m.role === "orchestrator")
+      .map(m => ({
+        role: m.role === "user" ? "user" as const : "assistant" as const,
+        content: m.content,
+      }));
+
+    try {
+      await sendMessage(
+        userContent,
+        conversationHistory,
+        {
+          onDelta: (chunk) => {
+            streamingContentRef.current += chunk;
+            updateLocalMessage(streamMsgId, {
+              content: streamingContentRef.current,
+            });
+          },
+          onPlan: (plan) => {
+            streamingPlanRef.current = plan.map((p, i) => ({
+              ...p,
+              id: `plan-${i}`,
+            }));
+            updateLocalMessage(streamMsgId, { 
+              plan: streamingPlanRef.current,
+            });
+          },
+          onDone: async () => {
+            // Save to DB with plan
+            if (streamingContentRef.current) {
+              await addMessage(
+                "orchestrator", 
+                streamingContentRef.current,
+                streamingPlanRef.current.map(p => ({
+                  label: p.label,
+                  agent: p.agent || "",
+                  status: p.status,
+                }))
+              );
+            }
+          },
+        }
+      );
+    } catch (error) {
+      // Update message to show error
+      updateLocalMessage(streamMsgId, {
+        content: "I encountered an error processing your request. Please try again.",
+      });
+    }
   };
   
   return (
@@ -134,35 +181,38 @@ export function CommandStream() {
           <Zap className="w-4 h-4 text-primary" />
           <h2 className="font-semibold text-sm">Command Stream</h2>
         </div>
-        <span className="text-xs px-2 py-1 rounded-full bg-primary/10 text-primary border border-primary/20">
-          Orchestrator Online
+        <span className={cn(
+          "text-xs px-2 py-1 rounded-full border",
+          orchestratorLoading 
+            ? "bg-status-active/10 text-status-active border-status-active/20"
+            : "bg-primary/10 text-primary border-primary/20"
+        )}>
+          {orchestratorLoading ? "Processing..." : "Orchestrator Online"}
         </span>
       </div>
       
       {/* Messages */}
       <div className="flex-1 overflow-y-auto custom-scrollbar p-4 space-y-4 grid-bg">
-        {mockMessages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
-        ))}
-      </div>
-      
-      {/* Approval Gate Example */}
-      <div className="mx-4 mb-2 p-3 bg-status-idle/10 border border-status-idle/30 rounded-lg">
-        <div className="flex items-center gap-2 mb-2">
-          <ShieldCheck className="w-4 h-4 text-status-idle" />
-          <span className="text-xs font-medium text-status-idle">Approval Required</span>
-        </div>
-        <p className="text-sm text-foreground mb-3">
-          Nova wants to write to <code className="text-primary font-mono text-xs">src/components/Brief.tsx</code>
-        </p>
-        <div className="flex gap-2">
-          <button className="flex-1 py-1.5 px-3 text-xs font-medium bg-status-active text-primary-foreground rounded-md hover:opacity-90 transition-opacity">
-            Approve
-          </button>
-          <button className="flex-1 py-1.5 px-3 text-xs font-medium bg-destructive/20 text-destructive border border-destructive/30 rounded-md hover:bg-destructive/30 transition-colors">
-            Deny
-          </button>
-        </div>
+        {messagesLoading ? (
+          <div className="flex items-center justify-center h-full">
+            <Loader2 className="w-6 h-6 text-primary animate-spin" />
+          </div>
+        ) : messages.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <Zap className="w-12 h-12 text-primary/30 mb-4" />
+            <h3 className="text-lg font-medium text-foreground mb-2">Ready for Commands</h3>
+            <p className="text-sm text-muted-foreground max-w-md">
+              Enter a task and the orchestrator will coordinate your agent team to complete it.
+            </p>
+          </div>
+        ) : (
+          <>
+            {messages.map((message) => (
+              <MessageBubble key={message.id} message={message} />
+            ))}
+            <div ref={messagesEndRef} />
+          </>
+        )}
       </div>
       
       {/* Input */}
@@ -173,13 +223,19 @@ export function CommandStream() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             placeholder="Enter your command..."
-            className="w-full pl-4 pr-12 py-3 text-sm bg-input border border-border rounded-lg placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary"
+            disabled={orchestratorLoading}
+            className="w-full pl-4 pr-12 py-3 text-sm bg-input border border-border rounded-lg placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary disabled:opacity-50"
           />
           <button
             type="submit"
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-primary hover:bg-primary/10 rounded-md transition-colors"
+            disabled={orchestratorLoading || !input.trim()}
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 text-primary hover:bg-primary/10 rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            <Send className="w-4 h-4" />
+            {orchestratorLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Send className="w-4 h-4" />
+            )}
           </button>
         </div>
       </form>
