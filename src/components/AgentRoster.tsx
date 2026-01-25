@@ -1,56 +1,23 @@
-import { Search, FlaskConical, Code2, Pencil, CheckCircle, Plus } from "lucide-react";
+import { useState } from "react";
+import { Search, FlaskConical, Code2, Pencil, CheckCircle, Plus, Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useAgents, type Agent } from "@/hooks/useAgents";
 
-type AgentStatus = "active" | "idle" | "offline";
+type AgentStatus = Agent["status"];
 
-interface Agent {
-  id: string;
-  name: string;
-  role: string;
-  status: AgentStatus;
-  tokens: number;
-  icon: React.ElementType;
-  colorClass: string;
-}
+const iconMap: Record<string, React.ElementType> = {
+  "Atlas": FlaskConical,
+  "Nova": Code2,
+  "Echo": Pencil,
+  "Sentinel": CheckCircle,
+};
 
-const agents: Agent[] = [
-  {
-    id: "researcher",
-    name: "Atlas",
-    role: "Researcher",
-    status: "active",
-    tokens: 12450,
-    icon: FlaskConical,
-    colorClass: "text-agent-researcher",
-  },
-  {
-    id: "coder",
-    name: "Nova",
-    role: "Coder",
-    status: "active",
-    tokens: 8920,
-    icon: Code2,
-    colorClass: "text-agent-coder",
-  },
-  {
-    id: "copywriter",
-    name: "Echo",
-    role: "Copywriter",
-    status: "idle",
-    tokens: 3200,
-    icon: Pencil,
-    colorClass: "text-agent-copywriter",
-  },
-  {
-    id: "reviewer",
-    name: "Sentinel",
-    role: "Reviewer",
-    status: "offline",
-    tokens: 0,
-    icon: CheckCircle,
-    colorClass: "text-agent-reviewer",
-  },
-];
+const colorMap: Record<string, string> = {
+  "Atlas": "text-agent-researcher",
+  "Nova": "text-agent-coder",
+  "Echo": "text-agent-copywriter",
+  "Sentinel": "text-agent-reviewer",
+};
 
 function StatusIndicator({ status }: { status: AgentStatus }) {
   return (
@@ -58,26 +25,33 @@ function StatusIndicator({ status }: { status: AgentStatus }) {
       className={cn(
         "w-2 h-2 rounded-full",
         status === "active" && "bg-status-active status-pulse",
+        status === "working" && "bg-status-active animate-pulse",
         status === "idle" && "bg-status-idle",
-        status === "offline" && "bg-status-offline"
+        status === "error" && "bg-destructive"
       )}
     />
   );
 }
 
 function AgentCard({ agent }: { agent: Agent }) {
-  const Icon = agent.icon;
+  const Icon = iconMap[agent.name] || FlaskConical;
+  const colorClass = colorMap[agent.name] || "text-primary";
   
   return (
     <div
       className={cn(
         "group p-3 rounded-lg border border-border bg-secondary/30 hover:bg-secondary/60 transition-all cursor-pointer",
-        agent.status === "active" && "border-primary/30 glow-border"
+        agent.status === "active" && "border-primary/30 glow-border",
+        agent.status === "working" && "border-status-active/50"
       )}
     >
       <div className="flex items-start gap-3">
-        <div className={cn("p-2 rounded-md bg-muted", agent.colorClass)}>
-          <Icon className="w-4 h-4" />
+        <div className={cn("p-2 rounded-md bg-muted", colorClass)}>
+          {agent.status === "working" ? (
+            <Loader2 className="w-4 h-4 animate-spin" />
+          ) : (
+            <Icon className="w-4 h-4" />
+          )}
         </div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
@@ -90,12 +64,12 @@ function AgentCard({ agent }: { agent: Agent }) {
         </div>
       </div>
       
-      {agent.status !== "offline" && (
+      {agent.status !== "error" && (
         <div className="mt-3 pt-2 border-t border-border/50">
           <div className="flex items-center justify-between text-xs">
             <span className="text-muted-foreground">Tokens</span>
             <span className="font-mono text-primary">
-              {agent.tokens.toLocaleString()}
+              {agent.tokens_used.toLocaleString()}
             </span>
           </div>
         </div>
@@ -104,7 +78,19 @@ function AgentCard({ agent }: { agent: Agent }) {
   );
 }
 
+const DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000001";
+
 export function AgentRoster() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const { agents, isLoading, error } = useAgents(DEFAULT_PROJECT_ID);
+
+  const filteredAgents = agents.filter(agent =>
+    agent.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    agent.role.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const activeCount = agents.filter(a => a.status === "active" || a.status === "working").length;
+
   return (
     <div className="h-full flex flex-col bg-card border-r border-border">
       {/* Header */}
@@ -114,7 +100,7 @@ export function AgentRoster() {
           <h2 className="font-semibold text-sm">Agent Roster</h2>
         </div>
         <span className="text-xs text-muted-foreground">
-          {agents.filter(a => a.status === "active").length} active
+          {activeCount} active
         </span>
       </div>
       
@@ -125,6 +111,8 @@ export function AgentRoster() {
           <input
             type="text"
             placeholder="Search agents..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-9 pr-3 py-2 text-sm bg-input border border-border rounded-md placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
@@ -132,9 +120,23 @@ export function AgentRoster() {
       
       {/* Agent List */}
       <div className="flex-1 overflow-y-auto custom-scrollbar p-3 space-y-2">
-        {agents.map((agent) => (
-          <AgentCard key={agent.id} agent={agent} />
-        ))}
+        {isLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-6 h-6 text-primary animate-spin" />
+          </div>
+        ) : error ? (
+          <div className="text-center py-8 text-destructive text-sm">
+            Failed to load agents
+          </div>
+        ) : filteredAgents.length === 0 ? (
+          <div className="text-center py-8 text-muted-foreground text-sm">
+            No agents found
+          </div>
+        ) : (
+          filteredAgents.map((agent) => (
+            <AgentCard key={agent.id} agent={agent} />
+          ))
+        )}
       </div>
       
       {/* Add Agent Button */}

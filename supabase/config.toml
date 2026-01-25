@@ -1,0 +1,4 @@
+project_id = "czmxerfxflataqwfakfq"
+
+[functions.orchestrator]
+verify_jwt = false
