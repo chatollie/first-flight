@@ -261,6 +261,70 @@ export type Database = {
         }
         Relationships: []
       }
+      tasks: {
+        Row: {
+          assignee: Database["public"]["Enums"]["assignee_type"]
+          conversation_id: string | null
+          created_at: string
+          description: string | null
+          id: string
+          order_index: number
+          parent_task_id: string | null
+          project_id: string | null
+          status: Database["public"]["Enums"]["task_status"]
+          title: string
+          updated_at: string
+        }
+        Insert: {
+          assignee?: Database["public"]["Enums"]["assignee_type"]
+          conversation_id?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          order_index?: number
+          parent_task_id?: string | null
+          project_id?: string | null
+          status?: Database["public"]["Enums"]["task_status"]
+          title: string
+          updated_at?: string
+        }
+        Update: {
+          assignee?: Database["public"]["Enums"]["assignee_type"]
+          conversation_id?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          order_index?: number
+          parent_task_id?: string | null
+          project_id?: string | null
+          status?: Database["public"]["Enums"]["task_status"]
+          title?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tasks_conversation_id_fkey"
+            columns: ["conversation_id"]
+            isOneToOne: false
+            referencedRelation: "conversations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_parent_task_id_fkey"
+            columns: ["parent_task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "tasks_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       tools: {
         Row: {
           api_key_env_name: string | null
@@ -323,8 +387,10 @@ export type Database = {
     }
     Enums: {
       agent_status: "active" | "idle" | "working" | "error"
+      assignee_type: "human" | "vox"
       message_role: "user" | "orchestrator" | "system" | "agent"
       plan_step_status: "pending" | "in-progress" | "completed"
+      task_status: "pending" | "in_progress" | "completed" | "blocked"
       tool_status: "ready" | "executing" | "error"
     }
     CompositeTypes: {
@@ -454,8 +520,10 @@ export const Constants = {
   public: {
     Enums: {
       agent_status: ["active", "idle", "working", "error"],
+      assignee_type: ["human", "vox"],
       message_role: ["user", "orchestrator", "system", "agent"],
       plan_step_status: ["pending", "in-progress", "completed"],
+      task_status: ["pending", "in_progress", "completed", "blocked"],
       tool_status: ["ready", "executing", "error"],
     },
   },
