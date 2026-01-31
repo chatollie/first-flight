@@ -1,5 +1,5 @@
 import { Header } from "@/components/Header";
-import { AgentRoster } from "@/components/AgentRoster";
+import { ToolRegistry } from "@/components/ToolRegistry";
 import { CommandStream } from "@/components/CommandStream";
 import { ArtifactCanvas } from "@/components/ArtifactCanvas";
 import {
@@ -15,9 +15,9 @@ const Index = () => {
       
       <div className="flex-1 min-h-0">
         <ResizablePanelGroup direction="horizontal" className="h-full">
-          {/* Pane A: Agent Roster */}
+          {/* Pane A: Tool Registry */}
           <ResizablePanel defaultSize={20} minSize={15} maxSize={30}>
-            <AgentRoster />
+            <ToolRegistry />
           </ResizablePanel>
           
           <ResizableHandle className="w-px bg-border hover:bg-primary/50 transition-colors" />

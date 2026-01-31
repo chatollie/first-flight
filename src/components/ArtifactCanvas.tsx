@@ -1,76 +1,27 @@
 import { useState } from "react";
-import { FileCode2, FileText, Table, Eye, Code, Quote, ExternalLink } from "lucide-react";
+import { FileCode2, FileText, Table, Eye, Code, Quote, ExternalLink, GitCompare, Loader2, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useArtifacts, type Artifact } from "@/hooks/useArtifacts";
 
-type ArtifactType = "markdown" | "code" | "table";
-type ViewMode = "preview" | "source";
+type ViewTab = "preview" | "code" | "diff";
 
-interface Artifact {
-  id: string;
-  title: string;
-  type: ArtifactType;
-  content: string;
-  citations?: string[];
-  lastUpdated: Date;
-}
+const DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000001";
 
-const mockArtifact: Artifact = {
-  id: "1",
-  title: "AI Orchestration Technical Brief",
-  type: "markdown",
-  content: `# AI Agent Orchestration Patterns
-
-## Executive Summary
-
-Modern AI systems are moving from single-model inference to **multi-agent orchestration**. This shift enables complex task decomposition and specialized processing.
-
-## Key Findings
-
-### 1. State Management Paradigms
-
-- **Shared Memory**: Agents read/write to a unified state store
-- **Message Passing**: Event-driven communication between agents
-- **Hierarchical Control**: Supervisor agents delegate to specialists
-
-### 2. Orchestration Frameworks
-
-| Framework | Language | Key Feature |
-|-----------|----------|-------------|
-| LangGraph | Python/JS | Cyclical graphs |
-| CrewAI | Python | Role-based agents |
-| AutoGen | Python | Multi-agent chat |
-
-### 3. Critical Success Factors
-
-1. **Context Preservation**: Maintaining state across agent handoffs
-2. **Tool Integration**: MCP for dynamic capability discovery
-3. **Human-in-the-Loop**: Approval gates for high-stakes operations
-
-## Recommendations
-
-> Focus on building a robust shared memory layer before scaling agent count. Context density is more valuable than agent diversity.
-`,
-  citations: [
-    "LangChain Documentation - Agent Architectures",
-    "Anthropic Research - Tool Use Patterns",
-    "OpenAI Cookbook - Multi-Agent Systems",
-  ],
-  lastUpdated: new Date(),
-};
-
-function ArtifactTypeIcon({ type }: { type: ArtifactType }) {
-  switch (type) {
+function ArtifactTypeIcon({ contentType }: { contentType: string }) {
+  switch (contentType) {
     case "markdown":
       return <FileText className="w-4 h-4" />;
     case "code":
       return <FileCode2 className="w-4 h-4" />;
     case "table":
       return <Table className="w-4 h-4" />;
+    default:
+      return <FileText className="w-4 h-4" />;
   }
 }
 
 function MarkdownRenderer({ content }: { content: string }) {
-  // Simple markdown rendering - in production, use a proper markdown library
   const lines = content.split('\n');
   
   return (
@@ -103,6 +54,22 @@ function MarkdownRenderer({ content }: { content: string }) {
             );
           }
         }
+        if (line.startsWith('- [ ] ')) {
+          return (
+            <div key={i} className="flex gap-2 my-1 items-center">
+              <input type="checkbox" disabled className="rounded border-border" />
+              <span className="text-muted-foreground">{line.slice(6)}</span>
+            </div>
+          );
+        }
+        if (line.startsWith('- [x] ')) {
+          return (
+            <div key={i} className="flex gap-2 my-1 items-center">
+              <input type="checkbox" checked disabled className="rounded border-border" />
+              <span className="text-muted-foreground line-through">{line.slice(6)}</span>
+            </div>
+          );
+        }
         if (line.startsWith('- ')) {
           return (
             <div key={i} className="flex gap-2 my-1">
@@ -114,7 +81,6 @@ function MarkdownRenderer({ content }: { content: string }) {
         if (line.match(/^\d+\. /)) {
           const num = line.match(/^(\d+)\. (.+)/);
           if (num) {
-            // Parse bold text
             const text = num[2];
             const parts = text.split(/\*\*(.+?)\*\*/g);
             return (
@@ -130,7 +96,6 @@ function MarkdownRenderer({ content }: { content: string }) {
           }
         }
         if (line.startsWith('|')) {
-          // Skip table header separator
           if (line.match(/^\|[-\s|]+\|$/)) return null;
           
           const cells = line.split('|').filter(c => c.trim());
@@ -156,79 +121,115 @@ function MarkdownRenderer({ content }: { content: string }) {
   );
 }
 
+function EmptyState() {
+  return (
+    <div className="flex flex-col items-center justify-center h-full text-center p-8">
+      <FileText className="w-12 h-12 text-muted-foreground/30 mb-4" />
+      <h3 className="text-lg font-medium text-foreground mb-2">No Artifact Selected</h3>
+      <p className="text-sm text-muted-foreground max-w-sm">
+        Ask Vox to create a document, and it will appear here in real-time.
+      </p>
+    </div>
+  );
+}
+
 export function ArtifactCanvas() {
-  const [viewMode, setViewMode] = useState<ViewMode>("preview");
-  const artifact = mockArtifact;
+  const [activeTab, setActiveTab] = useState<ViewTab>("preview");
+  const { currentArtifact, isLoading } = useArtifacts(DEFAULT_PROJECT_ID);
+  
+  if (isLoading) {
+    return (
+      <div className="h-full flex flex-col bg-card border-l border-border">
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 className="w-6 h-6 text-primary animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!currentArtifact) {
+    return (
+      <div className="h-full flex flex-col bg-card border-l border-border">
+        <div className="panel-header">
+          <div className="flex items-center gap-2 min-w-0">
+            <FileText className="w-4 h-4 text-muted-foreground" />
+            <h2 className="font-semibold text-sm text-muted-foreground">Artifact Canvas</h2>
+          </div>
+        </div>
+        <EmptyState />
+      </div>
+    );
+  }
   
   return (
     <div className="h-full flex flex-col bg-card border-l border-border">
       {/* Header */}
       <div className="panel-header">
         <div className="flex items-center gap-2 min-w-0">
-          <ArtifactTypeIcon type={artifact.type} />
-          <h2 className="font-semibold text-sm truncate">{artifact.title}</h2>
+          <ArtifactTypeIcon contentType={currentArtifact.content_type} />
+          <h2 className="font-semibold text-sm truncate">{currentArtifact.title}</h2>
         </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={() => setViewMode("preview")}
-            className={cn(
-              "p-1.5 rounded-md transition-colors",
-              viewMode === "preview" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <Eye className="w-4 h-4" />
-          </button>
-          <button
-            onClick={() => setViewMode("source")}
-            className={cn(
-              "p-1.5 rounded-md transition-colors",
-              viewMode === "source" ? "bg-primary/20 text-primary" : "text-muted-foreground hover:text-foreground"
-            )}
-          >
-            <Code className="w-4 h-4" />
-          </button>
-        </div>
+        <button className="p-1 rounded-md hover:bg-muted text-muted-foreground hover:text-foreground transition-colors">
+          <X className="w-4 h-4" />
+        </button>
       </div>
-      
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar p-4">
-        {viewMode === "preview" ? (
-          <MarkdownRenderer content={artifact.content} />
-        ) : (
-          <pre className="font-mono text-xs text-muted-foreground whitespace-pre-wrap">
-            {artifact.content}
+
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as ViewTab)} className="flex-1 flex flex-col min-h-0">
+        <div className="border-b border-border px-4">
+          <TabsList className="h-9 bg-transparent p-0 gap-4">
+            <TabsTrigger
+              value="preview"
+              className="h-9 px-0 pb-2 pt-2 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+            >
+              <Eye className="w-3.5 h-3.5 mr-1.5" />
+              Preview
+            </TabsTrigger>
+            <TabsTrigger
+              value="code"
+              className="h-9 px-0 pb-2 pt-2 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+            >
+              <Code className="w-3.5 h-3.5 mr-1.5" />
+              Code
+            </TabsTrigger>
+            <TabsTrigger
+              value="diff"
+              className="h-9 px-0 pb-2 pt-2 rounded-none border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent data-[state=active]:shadow-none"
+            >
+              <GitCompare className="w-3.5 h-3.5 mr-1.5" />
+              Diff
+            </TabsTrigger>
+          </TabsList>
+        </div>
+        
+        {/* Content */}
+        <TabsContent value="preview" className="flex-1 overflow-y-auto custom-scrollbar p-4 m-0">
+          <MarkdownRenderer content={currentArtifact.content} />
+        </TabsContent>
+
+        <TabsContent value="code" className="flex-1 overflow-y-auto custom-scrollbar p-4 m-0">
+          <pre className="font-mono text-xs text-muted-foreground whitespace-pre-wrap bg-muted/30 p-4 rounded-lg border border-border">
+            {currentArtifact.content}
           </pre>
-        )}
-      </div>
-      
-      {/* Evidence Bar */}
-      {artifact.citations && artifact.citations.length > 0 && (
-        <div className="border-t border-border p-3">
-          <div className="flex items-center gap-2 mb-2">
-            <Quote className="w-3 h-3 text-primary" />
-            <span className="text-xs font-medium text-muted-foreground">Evidence Sources</span>
+        </TabsContent>
+
+        <TabsContent value="diff" className="flex-1 overflow-y-auto custom-scrollbar p-4 m-0">
+          <div className="flex flex-col items-center justify-center h-full text-center">
+            <GitCompare className="w-8 h-8 text-muted-foreground/30 mb-3" />
+            <p className="text-sm text-muted-foreground">
+              Diff view coming soon
+            </p>
+            <p className="text-xs text-muted-foreground/70 mt-1">
+              v{currentArtifact.version}
+            </p>
           </div>
-          <div className="space-y-1">
-            {artifact.citations.map((citation, i) => (
-              <div
-                key={i}
-                className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground cursor-pointer group"
-              >
-                <span className="w-4 h-4 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-mono">
-                  {i + 1}
-                </span>
-                <span className="flex-1 truncate">{citation}</span>
-                <ExternalLink className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+        </TabsContent>
+      </Tabs>
       
       {/* Footer */}
       <div className="border-t border-border px-4 py-2 flex items-center justify-between text-xs text-muted-foreground">
-        <span>Last updated: {artifact.lastUpdated.toLocaleTimeString()}</span>
-        <span className="font-mono">{artifact.type.toUpperCase()}</span>
+        <span>Last updated: {new Date(currentArtifact.updated_at).toLocaleTimeString()}</span>
+        <span className="font-mono">v{currentArtifact.version} • {currentArtifact.content_type.toUpperCase()}</span>
       </div>
     </div>
   );
