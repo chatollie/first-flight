@@ -1,6 +1,6 @@
 import { Header } from "@/components/Header";
 import { ToolRegistry } from "@/components/ToolRegistry";
-import { CommandStream } from "@/components/CommandStream";
+import { TaskConsole } from "@/components/TaskConsole";
 import { ArtifactCanvas } from "@/components/ArtifactCanvas";
 import {
   ResizableHandle,
@@ -22,9 +22,9 @@ const Index = () => {
           
           <ResizableHandle className="w-px bg-border hover:bg-primary/50 transition-colors" />
           
-          {/* Pane B: Command Stream */}
+          {/* Pane B: Task Console */}
           <ResizablePanel defaultSize={45} minSize={30}>
-            <CommandStream />
+            <TaskConsole />
           </ResizablePanel>
           
           <ResizableHandle className="w-px bg-border hover:bg-primary/50 transition-colors" />
