@@ -1,9 +1,9 @@
 
-# Vox Populi Refactor: Single Supervisor + MCP Tools Model
+# Dynamic Task Console Refactor
 
 ## Summary
 
-This refactor pivots from the current "multi-agent personas" architecture to a cleaner **single supervisor (Vox) + MCP Tools** model. The left pane becomes a Tool Registry instead of an Agent Roster, and the Artifact Canvas gains tabbed views (Preview/Code/Diff).
+This refactor transforms the center pane from a traditional chat bubble interface into a **Dynamic Task Console** - a project management-style interface where Vox generates actionable tasks rather than conversational messages.
 
 ---
 
@@ -11,10 +11,56 @@ This refactor pivots from the current "multi-agent personas" architecture to a c
 
 | Current State | New State |
 |---------------|-----------|
-| Agent Roster (Atlas, Nova, Echo, Sentinel personas) | Tool Registry (Filesystem, Brave Search, GitHub, Memory Vault) |
-| Agents table in DB with tokens tracking | Tools table with enable/disable state + API key config |
-| Plan steps assigned to agents | Tool Call blocks in chat stream |
-| Static mock artifact | Real-time synced artifacts with tabs |
+| Chat bubbles (user/orchestrator) | Task Cards with status badges |
+| Messages table stores conversations | Tasks table stores actionable items |
+| Plan steps embedded in messages | Top-level "Current Sprint" progress tracker |
+| Text responses from Vox | JSON task lists rendered as interactive cards |
+| No assignment concept | Assignee: Human or Vox |
+
+---
+
+## UI Structure
+
+```text
++------------------------------------------+
+|  Task Console                 [Vox Online]|
++------------------------------------------+
+|                                          |
+|  CURRENT SPRINT                          |
+|  [=====>              ] 2/5 tasks done   |
+|  [Search] [Analyze] [Draft] [Review] [>] |
+|                                          |
++------------------------------------------+
+|                                          |
+|  TASK FEED                               |
+|                                          |
+|  +------------------------------------+  |
+|  | [In Progress]  [Vox icon]          |  |
+|  | Research AI agent frameworks       |  |
+|  | Searching for latest information...|  |
+|  | [glow effect on border]            |  |
+|  +------------------------------------+  |
+|                                          |
+|  +------------------------------------+  |
+|  | [Blocked]  [Human icon] (highlight)|  |
+|  | Confirm pricing strategy           |  |
+|  | Waiting for your decision          |  |
+|  | [Complete] [Assign to Vox] [Delete]|  |
+|  +------------------------------------+  |
+|                                          |
+|  +------------------------------------+  |
+|  | [Pending]  [Vox icon]              |  |
+|  | Write summary document             |  |
+|  | Will begin after research complete |  |
+|  | [Complete] [Assign to Vox] [Delete]|  |
+|  +------------------------------------+  |
+|                                          |
++------------------------------------------+
+|                                          |
+|  [Add a task or tell Vox what to do...] |
+|                                  [Send]  |
++------------------------------------------+
+```
 
 ---
 
@@ -22,183 +68,145 @@ This refactor pivots from the current "multi-agent personas" architecture to a c
 
 ### Step 1: Database Schema Migration
 
-**Replace the `agents` table with a `tools` table:**
+**Create a new `tasks` table:**
 
 ```sql
--- New tools table
-CREATE TABLE tools (
+-- Task status enum
+CREATE TYPE task_status AS ENUM ('pending', 'in_progress', 'completed', 'blocked');
+
+-- Assignee type enum
+CREATE TYPE assignee_type AS ENUM ('human', 'vox');
+
+-- Tasks table
+CREATE TABLE tasks (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   project_id UUID REFERENCES projects(id),
-  name TEXT NOT NULL,
+  conversation_id UUID REFERENCES conversations(id),
+  title TEXT NOT NULL,
   description TEXT,
-  icon TEXT NOT NULL,           -- Lucide icon name
-  category TEXT DEFAULT 'general',
-  is_enabled BOOLEAN DEFAULT true,
-  requires_api_key BOOLEAN DEFAULT false,
-  api_key_env_name TEXT,        -- e.g., 'BRAVE_API_KEY'
-  status TEXT DEFAULT 'ready',  -- ready, executing, error
-  created_at TIMESTAMPTZ DEFAULT now(),
-  updated_at TIMESTAMPTZ DEFAULT now()
+  status task_status NOT NULL DEFAULT 'pending',
+  assignee assignee_type NOT NULL DEFAULT 'vox',
+  order_index INTEGER NOT NULL DEFAULT 0,
+  parent_task_id UUID REFERENCES tasks(id),  -- For subtasks
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Add tool_calls_json to messages for tracking tool invocations
-ALTER TABLE messages ADD COLUMN tool_calls JSONB;
+-- RLS policy
+ALTER TABLE tasks ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Allow all access to tasks" ON tasks
+  FOR ALL USING (true) WITH CHECK (true);
 
--- Enable realtime for artifacts
-ALTER PUBLICATION supabase_realtime ADD TABLE artifacts;
+-- Enable realtime
+ALTER PUBLICATION supabase_realtime ADD TABLE tasks;
+
+-- Updated_at trigger
+CREATE TRIGGER set_tasks_updated_at
+  BEFORE UPDATE ON tasks
+  FOR EACH ROW
+  EXECUTE FUNCTION update_updated_at_column();
 ```
-
-**Seed initial tools:**
-- Filesystem (HardDrive icon) - Active
-- Brave Search (Globe icon) - Active  
-- GitHub (Github icon) - Inactive
-- Memory Vault (Database icon) - Active
 
 ---
 
-### Step 2: Tool Registry Component (Left Pane)
+### Step 2: Create useTasks Hook
 
-**Replace `AgentRoster.tsx` with `ToolRegistry.tsx`:**
+**New file: `src/hooks/useTasks.ts`**
 
-```text
-+---------------------------+
-|  Tool Registry            |
-+---------------------------+
-| [Search tools...]         |
-+---------------------------+
-| +---------------------+   |
-| | [HardDrive] Filesystem  |
-| | Read/write local files  |
-| | [Toggle: ON]  [Gear]    |
-| | Status: Ready (green)   |
-| +---------------------+   |
-|                           |
-| +---------------------+   |
-| | [Globe] Brave Search    |
-| | Web search capability   |
-| | [Toggle: ON]  [Gear]    |
-| | Status: Ready (green)   |
-| +---------------------+   |
-|                           |
-| ... more tools ...        |
-+---------------------------+
-| [+ Add Tool]              |
-+---------------------------+
-```
-
-**Features:**
-- Toggle switch to enable/disable each tool
-- Status dot: Green (Ready), Yellow (Executing), Red (Error)
-- Gear icon on hover opens configuration dialog (for API keys)
-- Search filter for tools
+- Fetch tasks from DB ordered by `order_index`
+- Subscribe to realtime updates (status changes)
+- Provide CRUD operations:
+  - `addTask(title, description, assignee)`
+  - `updateTaskStatus(id, status)`
+  - `updateTaskAssignee(id, assignee)`
+  - `deleteTask(id)`
+  - `addLocalTask()` for optimistic UI
 
 ---
 
-### Step 3: Command Stream Enhancements
+### Step 3: Create TaskCard Component
 
-**Update the chat to show Tool Call blocks instead of agent assignments:**
+**New file: `src/components/TaskCard.tsx`**
 
-```text
-+---------------------------------------+
-| USER: Search for AI agent frameworks  |
-+---------------------------------------+
-
-+---------------------------------------+
-| VOX:                                  |
-| I'll search for that information.     |
-|                                       |
-| +--------------------------------+    |
-| | [Globe] Using Brave Search...  |    |
-| | Query: "AI agent frameworks"   |    |
-| | Status: Executing...           |    |
-| +--------------------------------+    |
-|                                       |
-| Found 5 relevant results. Let me      |
-| compile this into a document.         |
-|                                       |
-| +--------------------------------+    |
-| | [HardDrive] Writing artifact   |    |
-| | File: research-notes.md        |    |
-| | [Approve] [Reject]             |  <-- HITL gate
-| +--------------------------------+    |
-+---------------------------------------+
-```
-
-**New message types:**
-- `tool_call`: Shows tool invocation with parameters
-- Add HITL approval buttons for "write" operations
+Features:
+- Status Badge: Colored pills (Pending=gray, In Progress=cyan, Completed=green, Blocked=amber)
+- Assignee Icon: User icon (human) or Bot/Zap icon (Vox)
+- Title and description display
+- Action buttons:
+  - Checkbox to mark complete
+  - Robot button to assign to Vox
+  - Trash button to delete
+- Glow effect when status is "In Progress"
+- Highlight border (amber) when assignee is "human" and status is "blocked"
 
 ---
 
-### Step 4: Artifact Canvas with Tabs
+### Step 4: Create SprintProgress Component
 
-**Enhance the right pane with tabbed interface:**
+**New file: `src/components/SprintProgress.tsx`**
 
-```text
-+----------------------------------------+
-| [Research Notes]              [X]      |
-+----------------------------------------+
-| [Preview] [Code] [Diff]                |
-+----------------------------------------+
-|                                        |
-|  # AI Agent Frameworks                 |
-|                                        |
-|  ## Overview                           |
-|  Modern frameworks include...          |
-|                                        |
-|  | Framework | Language |              |
-|  |-----------|----------|              |
-|  | LangGraph | Python   |              |
-|                                        |
-+----------------------------------------+
-| Last updated: 2:34 PM | v1.2           |
-+----------------------------------------+
-```
-
-**Features:**
-- **Preview tab**: Rendered Markdown (current behavior)
-- **Code tab**: Syntax-highlighted raw content
-- **Diff tab**: Show changes from previous version (future)
-- Real-time updates via Supabase subscription to `artifacts` table
+- Horizontal progress bar showing completed/total tasks
+- Row of mini task chips showing abbreviated titles
+- Clicking a chip scrolls to that task in the feed
+- "In Progress" task chip gets a pulse animation
 
 ---
 
-### Step 5: Orchestrator Edge Function Update
+### Step 5: Create TaskConsole Component
 
-**Update system prompt to use tool-calling paradigm:**
+**New file: `src/components/TaskConsole.tsx`**
+
+Replaces CommandStream.tsx with:
+
+**Layout:**
+- Header with "Task Console" title and Vox status
+- SprintProgress component (top section)
+- Scrollable TaskFeed (middle section)
+- Command input (bottom section) - textarea for adding tasks or talking to Vox
+
+**Behavior:**
+- Input can be a direct task (starts with "Task:" or similar) or a command to Vox
+- When Vox responds, parse JSON task list and create tasks in DB
+- Tasks appear in feed via realtime subscription
+
+---
+
+### Step 6: Update Orchestrator Edge Function
+
+**Modify system prompt to output tasks:**
 
 ```typescript
-const VOX_SYSTEM_PROMPT = `You are Vox, a single AI supervisor for the Vox Populi workstation.
+const VOX_SYSTEM_PROMPT = `You are Vox, the AI supervisor for Vox Populi.
 
-You have access to these MCP tools:
-- filesystem: Read and write local files
-- brave_search: Search the web for information
-- github: Interact with GitHub repositories
-- memory_vault: Store and retrieve persistent context
+## Response Format
 
-When you need to use a tool, respond with a tool_call block:
-{"tool_call": {"tool": "brave_search", "params": {"query": "..."}}}
+When given a complex request, break it into tasks:
+\`\`\`json
+{"tasks": [
+  {"title": "Research AI frameworks", "description": "Search for latest options", "assignee": "vox"},
+  {"title": "Confirm pricing tier", "description": "Need human decision on freemium vs paid", "assignee": "human"},
+  {"title": "Write summary", "description": "Compile findings into document", "assignee": "vox"}
+]}
+\`\`\`
 
-For write operations (filesystem write, github commit), pause and request approval:
-{"tool_call": {"tool": "filesystem", "action": "write", "requires_approval": true, ...}}
+## Task Assignment Rules
+- Assign to "vox" for research, writing, coding, searching
+- Assign to "human" for decisions, approvals, confirmations, external actions
+- Human-assigned tasks should be marked as "blocked" until actioned
 
-Generate checklists for complex tasks using markdown checkboxes.`;
+## Guidelines
+1. Be task-oriented, not conversational
+2. Break complex requests into 3-7 discrete tasks
+3. Order tasks by dependency (blocked tasks after their dependencies)
+4. Include brief descriptions for context
+`;
 ```
 
 ---
 
-### Step 6: New Hooks
+### Step 7: Update Index.tsx
 
-**Create `useTools.ts`:**
-- Fetch tools from DB
-- Toggle enable/disable
-- Update tool status (ready/executing/error)
-- Save API key configuration
-
-**Create `useArtifacts.ts`:**
-- Real-time subscription to artifacts table
-- CRUD operations for artifacts
-- Version tracking
+Replace `<CommandStream />` with `<TaskConsole />`.
 
 ---
 
@@ -206,27 +214,37 @@ Generate checklists for complex tasks using markdown checkboxes.`;
 
 | Action | File |
 |--------|------|
-| **Delete** | `src/hooks/useAgents.ts` |
-| **Delete** | `src/components/AgentRoster.tsx` |
-| **Create** | `src/hooks/useTools.ts` |
-| **Create** | `src/hooks/useArtifacts.ts` |
-| **Create** | `src/components/ToolRegistry.tsx` |
-| **Create** | `src/components/ToolCard.tsx` |
-| **Create** | `src/components/ToolConfigDialog.tsx` |
-| **Create** | `src/components/ToolCallBlock.tsx` |
-| **Create** | `src/components/ApprovalGate.tsx` |
-| **Modify** | `src/components/ArtifactCanvas.tsx` (add tabs) |
-| **Modify** | `src/components/CommandStream.tsx` (tool calls, HITL) |
-| **Modify** | `src/pages/Index.tsx` (swap AgentRoster for ToolRegistry) |
-| **Modify** | `supabase/functions/orchestrator/index.ts` (new prompt) |
-| **Migrate** | Database: Add tools table, modify messages |
+| **Migrate** | Database: Create tasks table with enums |
+| **Create** | `src/hooks/useTasks.ts` |
+| **Create** | `src/components/TaskCard.tsx` |
+| **Create** | `src/components/SprintProgress.tsx` |
+| **Create** | `src/components/TaskConsole.tsx` |
+| **Modify** | `supabase/functions/orchestrator/index.ts` (task-based prompt) |
+| **Modify** | `src/pages/Index.tsx` (swap CommandStream for TaskConsole) |
+| **Keep** | `src/components/CommandStream.tsx` (preserve for reference/future use) |
 
 ---
 
 ## Technical Notes
 
-- The `agents` table can be dropped after migration, or kept for backward compatibility
-- Tool status updates will use Supabase realtime for live UI feedback
-- HITL approval gates will emit events that the orchestrator waits for before continuing
-- Artifact versioning uses the existing `version` column with increment on update
-- The theme (Obsidian/Cyberpunk dark mode) remains unchanged
+### Aesthetics
+- Keep "Obsidian" dark theme (slate-950 background)
+- Use shadcn/ui Card and Badge components
+- "In Progress" tasks get a cyan glow border (existing `glow-border` class)
+- "Blocked" human tasks get amber/yellow highlight border
+- Status badges use existing color variables:
+  - Pending: `muted-foreground`
+  - In Progress: `primary` (cyan)
+  - Completed: `status-active` (green)
+  - Blocked: `status-idle` (amber)
+
+### Realtime Updates
+- When Vox completes a background task (e.g., search finishes), it updates task status in DB
+- UI receives realtime event and flips card to "Completed" with animation
+- Sprint progress bar updates automatically
+
+### Parsing Logic
+- Input detection: If user types "Task: ..." create task directly
+- Otherwise, send to Vox orchestrator
+- Parse `{"tasks": [...]}` JSON from Vox response
+- Insert tasks to DB, which triggers realtime updates to UI
