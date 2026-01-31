@@ -152,6 +152,7 @@ export type Database = {
           created_at: string
           id: string
           role: Database["public"]["Enums"]["message_role"]
+          tool_calls: Json | null
         }
         Insert: {
           agent_id?: string | null
@@ -160,6 +161,7 @@ export type Database = {
           created_at?: string
           id?: string
           role: Database["public"]["Enums"]["message_role"]
+          tool_calls?: Json | null
         }
         Update: {
           agent_id?: string | null
@@ -168,6 +170,7 @@ export type Database = {
           created_at?: string
           id?: string
           role?: Database["public"]["Enums"]["message_role"]
+          tool_calls?: Json | null
         }
         Relationships: [
           {
@@ -258,6 +261,59 @@ export type Database = {
         }
         Relationships: []
       }
+      tools: {
+        Row: {
+          api_key_env_name: string | null
+          category: string | null
+          created_at: string | null
+          description: string | null
+          icon: string
+          id: string
+          is_enabled: boolean | null
+          name: string
+          project_id: string | null
+          requires_api_key: boolean | null
+          status: Database["public"]["Enums"]["tool_status"] | null
+          updated_at: string | null
+        }
+        Insert: {
+          api_key_env_name?: string | null
+          category?: string | null
+          created_at?: string | null
+          description?: string | null
+          icon: string
+          id?: string
+          is_enabled?: boolean | null
+          name: string
+          project_id?: string | null
+          requires_api_key?: boolean | null
+          status?: Database["public"]["Enums"]["tool_status"] | null
+          updated_at?: string | null
+        }
+        Update: {
+          api_key_env_name?: string | null
+          category?: string | null
+          created_at?: string | null
+          description?: string | null
+          icon?: string
+          id?: string
+          is_enabled?: boolean | null
+          name?: string
+          project_id?: string | null
+          requires_api_key?: boolean | null
+          status?: Database["public"]["Enums"]["tool_status"] | null
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "tools_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
     }
     Views: {
       [_ in never]: never
@@ -269,6 +325,7 @@ export type Database = {
       agent_status: "active" | "idle" | "working" | "error"
       message_role: "user" | "orchestrator" | "system" | "agent"
       plan_step_status: "pending" | "in-progress" | "completed"
+      tool_status: "ready" | "executing" | "error"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -399,6 +456,7 @@ export const Constants = {
       agent_status: ["active", "idle", "working", "error"],
       message_role: ["user", "orchestrator", "system", "agent"],
       plan_step_status: ["pending", "in-progress", "completed"],
+      tool_status: ["ready", "executing", "error"],
     },
   },
 } as const

@@ -1,15 +1,16 @@
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Send, Zap, CheckCircle2, Circle, Loader2, ShieldCheck } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useMessages, type Message, type PlanStep } from "@/hooks/useMessages";
 import { useOrchestrator } from "@/hooks/useOrchestrator";
+import { ToolCallBlock, type ToolCall } from "@/components/ToolCallBlock";
 
-function PlanStepper({ steps }: { steps: PlanStep[] }) {
+function ChecklistStepper({ steps }: { steps: PlanStep[] }) {
   return (
     <div className="mt-3 p-3 bg-muted/50 rounded-lg border border-border/50">
       <div className="flex items-center gap-2 mb-3">
         <Zap className="w-4 h-4 text-primary" />
-        <span className="text-xs font-medium text-muted-foreground">Execution Plan</span>
+        <span className="text-xs font-medium text-muted-foreground">Execution Checklist</span>
       </div>
       <div className="space-y-2">
         {steps.map((step, index) => (
@@ -32,9 +33,6 @@ function PlanStepper({ steps }: { steps: PlanStep[] }) {
               )}>
                 {step.label}
               </p>
-              {step.agent && (
-                <span className="text-xs text-primary">@{step.agent}</span>
-              )}
             </div>
           </div>
         ))}
@@ -43,9 +41,20 @@ function PlanStepper({ steps }: { steps: PlanStep[] }) {
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+function MessageBubble({ 
+  message, 
+  onApproveToolCall, 
+  onRejectToolCall 
+}: { 
+  message: Message;
+  onApproveToolCall?: (toolCallId: string) => void;
+  onRejectToolCall?: (toolCallId: string) => void;
+}) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+  
+  // Parse tool calls from message if present
+  const toolCalls: ToolCall[] = message.toolCalls || [];
   
   return (
     <div className={cn(
@@ -64,8 +73,25 @@ function MessageBubble({ message }: { message: Message }) {
             <span className="text-xs text-primary font-medium">System</span>
           </div>
         )}
+        
+        {/* Render checklist at top if present */}
+        {message.plan && message.plan.length > 0 && (
+          <ChecklistStepper steps={message.plan} />
+        )}
+        
+        {/* Message content */}
         <p className="text-sm whitespace-pre-wrap">{message.content}</p>
-        {message.plan && message.plan.length > 0 && <PlanStepper steps={message.plan} />}
+        
+        {/* Render tool calls */}
+        {toolCalls.map((tc) => (
+          <ToolCallBlock
+            key={tc.id}
+            toolCall={tc}
+            onApprove={onApproveToolCall}
+            onReject={onRejectToolCall}
+          />
+        ))}
+        
         <p className={cn(
           "text-xs mt-2",
           isUser ? "text-primary-foreground/70" : "text-muted-foreground"
@@ -84,11 +110,25 @@ export function CommandStream() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingContentRef = useRef<string>("");
   const streamingPlanRef = useRef<PlanStep[]>([]);
+  const streamingToolCallsRef = useRef<ToolCall[]>([]);
 
-  // Auto-scroll to bottom when messages change
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
+
+  const handleApproveToolCall = (toolCallId: string) => {
+    console.log("Approved tool call:", toolCallId);
+    // In a full implementation, this would:
+    // 1. Update the tool call status in DB
+    // 2. Signal the orchestrator to continue
+  };
+
+  const handleRejectToolCall = (toolCallId: string) => {
+    console.log("Rejected tool call:", toolCallId);
+    // In a full implementation, this would:
+    // 1. Update the tool call status to "error"
+    // 2. Signal the orchestrator to abort or retry
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -97,7 +137,6 @@ export function CommandStream() {
     const userContent = input.trim();
     setInput("");
     
-    // Add user message locally immediately
     const userMsgId = `local-user-${Date.now()}`;
     addLocalMessage({
       id: userMsgId,
@@ -106,13 +145,12 @@ export function CommandStream() {
       timestamp: new Date(),
     });
 
-    // Save user message to DB
     await addMessage("user", userContent);
 
-    // Create streaming orchestrator message
     const streamMsgId = `local-orch-${Date.now()}`;
     streamingContentRef.current = "";
     streamingPlanRef.current = [];
+    streamingToolCallsRef.current = [];
     
     addLocalMessage({
       id: streamMsgId,
@@ -121,7 +159,6 @@ export function CommandStream() {
       timestamp: new Date(),
     });
 
-    // Build conversation history for context (exclude the just-added messages)
     const conversationHistory = messages
       .filter(m => m.role === "user" || m.role === "orchestrator")
       .map(m => ({
@@ -136,8 +173,37 @@ export function CommandStream() {
         {
           onDelta: (chunk) => {
             streamingContentRef.current += chunk;
+            
+            // Parse tool_call blocks from streaming content
+            const toolCallMatch = streamingContentRef.current.match(/\{"tool_call":\s*(\{[^}]+\})\}/g);
+            if (toolCallMatch) {
+              const parsedCalls: ToolCall[] = toolCallMatch.map((match, idx) => {
+                try {
+                  const parsed = JSON.parse(match);
+                  return {
+                    id: `tc-${idx}`,
+                    tool: parsed.tool_call?.tool || "unknown",
+                    action: parsed.tool_call?.action,
+                    params: parsed.tool_call?.params,
+                    status: parsed.tool_call?.requires_approval ? "pending" : "executing",
+                    requires_approval: parsed.tool_call?.requires_approval,
+                  } as ToolCall;
+                } catch {
+                  return null;
+                }
+              }).filter(Boolean) as ToolCall[];
+              
+              streamingToolCallsRef.current = parsedCalls;
+            }
+            
+            // Clean tool_call JSON from display content
+            const cleanContent = streamingContentRef.current
+              .replace(/\{"tool_call":\s*\{[^}]+\}\}/g, '')
+              .trim();
+            
             updateLocalMessage(streamMsgId, {
-              content: streamingContentRef.current,
+              content: cleanContent,
+              toolCalls: streamingToolCallsRef.current,
             });
           },
           onPlan: (plan) => {
@@ -150,11 +216,14 @@ export function CommandStream() {
             });
           },
           onDone: async () => {
-            // Save to DB with plan
-            if (streamingContentRef.current) {
+            const cleanContent = streamingContentRef.current
+              .replace(/\{"tool_call":\s*\{[^}]+\}\}/g, '')
+              .trim();
+              
+            if (cleanContent) {
               await addMessage(
                 "orchestrator", 
-                streamingContentRef.current,
+                cleanContent,
                 streamingPlanRef.current.map(p => ({
                   label: p.label,
                   agent: p.agent || "",
@@ -166,7 +235,6 @@ export function CommandStream() {
         }
       );
     } catch (error) {
-      // Update message to show error
       updateLocalMessage(streamMsgId, {
         content: "I encountered an error processing your request. Please try again.",
       });
@@ -187,7 +255,7 @@ export function CommandStream() {
             ? "bg-status-active/10 text-status-active border-status-active/20"
             : "bg-primary/10 text-primary border-primary/20"
         )}>
-          {orchestratorLoading ? "Processing..." : "Orchestrator Online"}
+          {orchestratorLoading ? "Processing..." : "Vox Online"}
         </span>
       </div>
       
@@ -202,13 +270,18 @@ export function CommandStream() {
             <Zap className="w-12 h-12 text-primary/30 mb-4" />
             <h3 className="text-lg font-medium text-foreground mb-2">Ready for Commands</h3>
             <p className="text-sm text-muted-foreground max-w-md">
-              Enter a task and the orchestrator will coordinate your agent team to complete it.
+              Tell Vox what you need. It will use available tools to complete your task.
             </p>
           </div>
         ) : (
           <>
             {messages.map((message) => (
-              <MessageBubble key={message.id} message={message} />
+              <MessageBubble 
+                key={message.id} 
+                message={message}
+                onApproveToolCall={handleApproveToolCall}
+                onRejectToolCall={handleRejectToolCall}
+              />
             ))}
             <div ref={messagesEndRef} />
           </>
@@ -222,7 +295,7 @@ export function CommandStream() {
             type="text"
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Enter your command..."
+            placeholder="Tell Vox what you need..."
             disabled={orchestratorLoading}
             className="w-full pl-4 pr-12 py-3 text-sm bg-input border border-border rounded-lg placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary focus:border-primary disabled:opacity-50"
           />

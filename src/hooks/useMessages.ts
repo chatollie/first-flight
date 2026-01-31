@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import type { ToolCall } from "@/components/ToolCallBlock";
 
 export interface PlanStep {
-  id: string;
+  id?: string;
   label: string;
   status: "pending" | "in-progress" | "completed";
   agent?: string;
@@ -14,6 +15,7 @@ export interface Message {
   content: string;
   timestamp: Date;
   plan?: PlanStep[];
+  toolCalls?: ToolCall[];
   agentName?: string;
 }
 
