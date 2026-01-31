@@ -3,6 +3,12 @@ import { supabase } from "@/integrations/supabase/client";
 
 export type ToolStatus = "ready" | "executing" | "error";
 
+export interface MCPConfig {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+}
+
 export interface Tool {
   id: string;
   project_id: string | null;
@@ -14,6 +20,7 @@ export interface Tool {
   requires_api_key: boolean;
   api_key_env_name: string | null;
   status: ToolStatus;
+  config?: MCPConfig;
   created_at: string;
   updated_at: string;
 }
@@ -36,7 +43,13 @@ export function useTools(projectId?: string) {
         
         if (error) throw error;
         
-        setTools(data as Tool[]);
+        // Map the data to our Tool type, handling config properly
+        const mappedTools = (data || []).map((tool) => ({
+          ...tool,
+          config: tool.config as unknown as MCPConfig | undefined,
+        })) as Tool[];
+        
+        setTools(mappedTools);
       } catch (err) {
         setError(err instanceof Error ? err : new Error("Failed to fetch tools"));
       } finally {

@@ -4,12 +4,14 @@ import { cn } from "@/lib/utils";
 import { useTools, type Tool } from "@/hooks/useTools";
 import { ToolCard } from "@/components/ToolCard";
 import { ToolConfigDialog } from "@/components/ToolConfigDialog";
+import { CustomMCPToolModal } from "@/components/CustomMCPToolModal";
 
 const DEFAULT_PROJECT_ID = "00000000-0000-0000-0000-000000000001";
 
 export function ToolRegistry() {
   const [searchQuery, setSearchQuery] = useState("");
   const [configTool, setConfigTool] = useState<Tool | null>(null);
+  const [showMCPModal, setShowMCPModal] = useState(false);
   const { tools, isLoading, error, toggleTool } = useTools(DEFAULT_PROJECT_ID);
 
   const filteredTools = tools.filter(
@@ -90,9 +92,12 @@ export function ToolRegistry() {
 
       {/* Add Tool Button */}
       <div className="p-3 border-t border-border">
-        <button className="w-full flex items-center justify-center gap-2 py-2 px-4 text-sm text-muted-foreground hover:text-foreground border border-dashed border-border hover:border-primary/50 rounded-lg transition-colors">
+        <button
+          onClick={() => setShowMCPModal(true)}
+          className="w-full flex items-center justify-center gap-2 py-2 px-4 text-sm text-muted-foreground hover:text-foreground border border-dashed border-border hover:border-primary/50 rounded-lg transition-colors"
+        >
           <Plus className="w-4 h-4" />
-          <span>Add Tool</span>
+          <span>Add MCP Tool</span>
         </button>
       </div>
 
@@ -102,6 +107,13 @@ export function ToolRegistry() {
         open={configTool !== null}
         onOpenChange={(open) => !open && setConfigTool(null)}
         onSave={handleSaveConfig}
+      />
+
+      {/* Custom MCP Tool Modal */}
+      <CustomMCPToolModal
+        open={showMCPModal}
+        onOpenChange={setShowMCPModal}
+        projectId={DEFAULT_PROJECT_ID}
       />
     </div>
   );

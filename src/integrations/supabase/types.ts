@@ -329,6 +329,7 @@ export type Database = {
         Row: {
           api_key_env_name: string | null
           category: string | null
+          config: Json | null
           created_at: string | null
           description: string | null
           icon: string
@@ -343,6 +344,7 @@ export type Database = {
         Insert: {
           api_key_env_name?: string | null
           category?: string | null
+          config?: Json | null
           created_at?: string | null
           description?: string | null
           icon: string
@@ -357,6 +359,7 @@ export type Database = {
         Update: {
           api_key_env_name?: string | null
           category?: string | null
+          config?: Json | null
           created_at?: string | null
           description?: string | null
           icon?: string
